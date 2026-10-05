@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Arth",
+  "version": "0.1.0",
+  "description": "Select a word or phrase in a ChatGPT conversation and get a short explanation of what it means in that context.",
+  "minimum_chrome_version": "123",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["storage"],
+  "background": { "service_worker": "src/background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["src/frames.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["src/adapter.js", "src/context.js", "src/worker.js", "src/reader.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
