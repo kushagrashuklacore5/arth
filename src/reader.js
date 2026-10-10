@@ -7,18 +7,24 @@
   const GAP_PX = 6;
   // Shown to the user as-is: no internal codes or component names.
   const ERROR_TEXT = {
-    NEEDS_LOGIN: 'Sign in to ChatGPT in the background tab Arth opened, then try again.',
-    CHALLENGE: 'ChatGPT wants a quick check in the background tab Arth opened. Complete it there, then try again.',
-    TIMEOUT: 'ChatGPT took too long to answer.',
-    CHATGPT_ERROR: 'ChatGPT could not answer just now.',
-    NOT_READY: 'ChatGPT did not load in time.',
-    WORKER_TAB: 'Arth uses this tab to get its answers. Use Arth from another ChatGPT tab.',
-    WORKER_CLOSED: 'The background ChatGPT tab was closed. Try again to reopen it.',
+    SETUP_NEEDED: 'Arth needs a one-time setup before it can explain text.',
+    INVALID_KEY: 'OpenAI did not accept the saved API key.',
+    NO_CREDIT: 'Your OpenAI account has no credit left for API requests.',
+    MODEL_UNAVAILABLE: 'The selected model is not available to your OpenAI account.',
+    NOT_ALLOWED: 'OpenAI refused the request for your account.',
+    RATE_LIMITED: 'OpenAI is limiting requests right now. Try again in a moment.',
+    TIMEOUT: 'OpenAI took too long to answer.',
+    NETWORK: 'Could not reach OpenAI. Check your connection.',
+    PROVIDER_DOWN: 'OpenAI is having problems right now.',
+    PROVIDER_REFUSED: 'OpenAI could not process this request.',
+    EMPTY_ANSWER: 'OpenAI returned an empty answer.',
     CONNECTION: 'The request was interrupted.',
     RELOAD_PAGE: 'Arth was updated. Reload this page to keep using it.',
   };
   const DEFAULT_ERROR = 'Could not get an answer.';
-  const NO_RETRY = new Set(['WORKER_TAB', 'RELOAD_PAGE']); // trying again here cannot help
+  // What the button under an error does: open Arth's settings, nothing, or (default) retry.
+  const ERROR_ACTION = { SETUP_NEEDED: 'setup', INVALID_KEY: 'setup', NO_CREDIT: 'setup', MODEL_UNAVAILABLE: 'setup', NOT_ALLOWED: 'setup', RELOAD_PAGE: 'none' };
+  const ACTION_LABEL = { retry: 'Retry', setup: 'Open Arth settings' };
 
   const host = document.createElement('div');
   host.setAttribute('data-ask-ai', '');
@@ -79,18 +85,19 @@
   let pressed = false; // a pointer is down somewhere outside our UI
   let settleTimer;
   let frame;
-  let isWorkerTab = false;
   // What the card shows: null (only the Ask AI button), or the selection it
   // belongs to plus the id of the request still in flight (null once settled).
   let shown = null;
 
   // view: 'button' | 'loading' | 'answer' | 'error'
-  function show(view, text = '', retryable = true) {
+  function show(view, text = '', action = 'retry') {
     askButton.hidden = view !== 'button';
     card.hidden = view === 'button';
     card.dataset.state = view;
     cardText.textContent = text; // never innerHTML: the answer is untrusted text
-    retryButton.hidden = view !== 'error' || !retryable;
+    retryButton.hidden = view !== 'error' || action === 'none';
+    retryButton.dataset.action = action;
+    retryButton.textContent = ACTION_LABEL[action] || '';
   }
   show('button');
 
@@ -98,8 +105,8 @@
   const conceal = () => {
     if (isOpen()) host.hidePopover();
   };
-  // Back to a bare button. A request still in flight is cancelled through the
-  // service worker's existing CANCEL path, and its reply will be ignored.
+  // Back to a bare button. A request still in flight is cancelled in the
+  // service worker, and its reply will be ignored.
   function reset() {
     if (shown?.requestId) {
       try {
@@ -139,19 +146,9 @@
     host.style.top = `${below ? rect.bottom + GAP_PX : rect.top - GAP_PX - h}px`;
   }
 
-  // The service worker sends these only to its worker/workspace tab, and always
-  // PINGs before giving it a job. A tab that receives one is not a reading tab.
-  // (worker.js answers the message; this listener only observes it.)
-  chrome.runtime.onMessage.addListener((msg, sender) => {
-    if (sender.id !== chrome.runtime.id || sender.tab) return;
-    if (!['PING', 'RUN', 'RESET', 'CANCEL'].includes(msg?.type)) return;
-    isWorkerTab = true;
-    dismiss();
-  });
-
   // The single source of truth for "should our UI be visible".
   function update() {
-    const ctx = isWorkerTab ? { error: 'WORKER_TAB' } : extractSelectionContext();
+    const ctx = extractSelectionContext();
     if (ctx.error) return dismiss();
     if (shown && shown.selectedText !== ctx.selectedText) reset(); // the card was for another selection
     place(ctx.selectionRange);
@@ -183,7 +180,7 @@
     if (shown?.requestId !== requestId) return;
     shown.requestId = null;
     if (res?.ok) show('answer', res.answer);
-    else show('error', ERROR_TEXT[res?.code] || DEFAULT_ERROR, !NO_RETRY.has(res?.code));
+    else show('error', ERROR_TEXT[res?.code] || DEFAULT_ERROR, ERROR_ACTION[res?.code] || 'retry');
     const sel = getSelection();
     if (sel.rangeCount && !sel.isCollapsed) place(sel.getRangeAt(0)); // the card changed size
   }
@@ -240,9 +237,18 @@
   window.addEventListener('resize', follow);
 
   shadow.addEventListener('mousedown', (e) => e.preventDefault()); // keep the page selection
-  const onAsk = (e) => {
-    if (e.isTrusted && !isWorkerTab) ask(); // only a real user click, never a page script
-  };
-  askButton.addEventListener('click', onAsk);
-  retryButton.addEventListener('click', onAsk);
+  // Only a real user click counts, never one dispatched by a page script.
+  askButton.addEventListener('click', (e) => {
+    if (e.isTrusted) ask();
+  });
+  retryButton.addEventListener('click', (e) => {
+    if (!e.isTrusted) return;
+    if (retryButton.dataset.action !== 'setup') return ask();
+    dismiss();
+    try {
+      chrome.runtime.sendMessage({ type: 'OPEN_SETUP' }).catch(() => {});
+    } catch {
+      // Extension reloaded under this page.
+    }
+  });
 })();
